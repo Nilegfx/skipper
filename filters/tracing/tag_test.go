@@ -10,30 +10,54 @@ import (
 )
 
 func TestTracingTag(t *testing.T) {
-	const tagName = "test_tag"
-	const tagValue = "test_value"
+	for _, ti := range []struct {
+		name     string
+		value    string
+		context  *filtertest.Context
+		expected interface{}
+	}{{
+		"plain key value",
+		"test_value",
+		&filtertest.Context{
+			FRequest: &http.Request{},
+		},
+		"test_value",
+	}, {
+		"tag from header",
+		"${request.header.X-Flow-Id}",
+		&filtertest.Context{
+			FRequest: &http.Request{
+				Header: http.Header{
+					"X-Flow-Id": []string{"foo"},
+				},
+			},
+		},
+		"foo",
+	}, {
+		"tag from missing header",
+		"${request.header.missing}",
+		&filtertest.Context{
+			FRequest: &http.Request{},
+		},
+		nil,
+	},
+	} {
+		t.Run(ti.name, func(t *testing.T) {
+			span := tracingtest.NewSpan("proxy")
+			ti.context.FRequest = ti.context.FRequest.WithContext(opentracing.ContextWithSpan(ti.context.FRequest.Context(), span))
 
-	req := &http.Request{}
+			s := NewTag()
+			f, err := s.CreateFilter([]interface{}{"test_tag", ti.value})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	span := tracingtest.NewSpan("proxy")
-	req = req.WithContext(opentracing.ContextWithSpan(req.Context(), span))
-	ctx := &filtertest.Context{FRequest: req}
-	s := NewTag()
-	f, err := s.CreateFilter([]interface{}{tagName, tagValue})
-	if err != nil {
-		t.Error(err)
-		return
-	}
+			f.Request(ti.context)
 
-	f.Request(ctx)
-
-	v, ok := span.Tags[tagName]
-	if !ok {
-		t.Errorf("tag was not set: %s", tagName)
-	}
-
-	vs, ok := v.(string)
-	if !ok || vs != tagValue {
-		t.Errorf("invalid tag value '%s' != '%s'", vs, tagValue)
+			got := span.Tags["test_tag"]
+			if got != ti.expected {
+				t.Errorf("unexpected tag value '%v' != '%v'", got, ti.expected)
+			}
+		})
 	}
 }
